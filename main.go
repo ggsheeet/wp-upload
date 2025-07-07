@@ -199,6 +199,7 @@ func main() {
 		}
 		runUploadOnly(startIndex)
 	case "full":
+		formatDoc()
 		if processOGImages() {
 			logger.Info("Starting WordPress upload...")
 			runUploadOnly(0)
