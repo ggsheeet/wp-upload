@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"mime"
 	"net/http"
 	"os"
@@ -222,7 +223,7 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) int {
 		ext = exts[0]
 	}
 
-	fileName := "upload-" + ext
+	fileName := generateRandomFilename() + ext
 	url := "https://gen.boletindiario.in/wp-json/wp/v2/media"
 
 	uploadReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
@@ -288,4 +289,13 @@ func createPost(title, content string, categoryID, imageID, postIndex int, token
 		logger.Debug("Response body: %s", string(body))
 		panic(fmt.Sprintf("Failed to create post %d: HTTP %d", postIndex, resp.StatusCode))
 	}
+}
+
+func generateRandomFilename() string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	result := make([]byte, 4)
+	for i := range result {
+		result[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(result)
 }
