@@ -3,3 +3,7 @@ bin
 .env
 
 *.txt
+
+.claude
+
+CLAUDE.md
