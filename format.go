@@ -52,6 +52,7 @@ func normalizeCategory(rawCategory string) string {
 		"LABORAL":                "laboral",
 		"COMERCIO EXTERIOR":      "comercio-exterior",
 		"NACIONALES":             "nacional",
+		"NACIONAL":               "nacional",
 		"ECONOMICA":              "nacional",
 		"EMPRESAS":               "empresas",
 		"FINANZAS":               "finanzas",
