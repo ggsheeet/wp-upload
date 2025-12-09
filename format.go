@@ -56,6 +56,7 @@ func normalizeCategory(rawCategory string) string {
 		"ECONOMICA":              "nacional",
 		"EMPRESAS":               "empresas",
 		"FINANZAS":               "finanzas",
+		"RESPONSABILIDA SOCIAL":  "rse",
 		"RESPONSABILIDAD SOCIAL": "rse",
 	}
 
