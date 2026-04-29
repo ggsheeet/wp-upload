@@ -21,6 +21,14 @@ primary_region = 'iad'
   min_machines_running = 0
   processes = ['app']
 
+# Cold starts (machine was stopped) can exceed default grace; avoids proxy/health timing out.
+[[http_service.checks]]
+  interval = '30s'
+  timeout = '10s'
+  grace_period = '45s'
+  method = 'GET'
+  path = '/'
+
 [[vm]]
   memory = '1gb'
   cpu_kind = 'shared'

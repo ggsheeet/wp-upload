@@ -10,5 +10,12 @@ RUN go build -v -o /run-app .
 
 FROM debian:bookworm
 
-COPY --from=builder /run-app /usr/local/bin/
-CMD ["run-app"]
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /run-app /usr/local/bin/run-app
+
+ENV PORT=8080
+EXPOSE 8080
+
+# Subcommand "web" is required; see main.go (default no-args only prints usage and exits).
+CMD ["/usr/local/bin/run-app", "web"]
