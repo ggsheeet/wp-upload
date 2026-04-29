@@ -157,11 +157,14 @@ func runWebServer() {
 	mux.HandleFunc("POST /api/upload", handleAPIUpload)
 	mux.Handle("/", http.FileServer(http.FS(static)))
 
+	// Local: 127.0.0.1 only. Fly.io / PaaS: set PORT; proxy must reach 0.0.0.0, not localhost.
 	addr := "127.0.0.1:8080"
 	if p := strings.TrimSpace(os.Getenv("WP_UPLOAD_WEB_ADDR")); p != "" {
 		addr = p
+	} else if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
+		addr = "0.0.0.0:" + port
 	}
-	logger.Info("Web UI: http://%s", addr)
+	logger.Info("Listening on %s", addr)
 	logger.Info("Uses .env from current directory (same as CLI upload).")
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		logger.Error("server: %v", err)

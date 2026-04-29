@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"mime"
 	"net/http"
@@ -16,6 +15,12 @@ import (
 )
 
 var logger = NewColoredLogger("", nil)
+
+// loadEnvFromDotfile merges .env into the environment when the file exists.
+// On Fly, use `fly secrets set` / [env]; there is no .env file in the image.
+func loadEnvFromDotfile() {
+	_ = godotenv.Load(".env")
+}
 
 // wordPressContentFromRaw turns the body lines after "Image:" (plain text / newlines)
 // into Gutenberg blocks, matching the legacy execPosts behavior.
@@ -62,9 +67,7 @@ func preparePostsForWP(posts []Post) []Post {
 }
 
 func uploadPosts(startIndex int) {
-	if err := godotenv.Load(".env"); err != nil {
-		log.Fatal("Error loading .env file")
-	}
+	loadEnvFromDotfile()
 
 	posts, err := parsePosts("posts.txt")
 	if err != nil {
@@ -106,9 +109,7 @@ func uploadPosts(startIndex int) {
 // UploadPostsFromEditor uploads posts parsed the same way as posts.txt (raw Content body).
 // Returns the 0-based index of the failed post and an error if any step fails.
 func UploadPostsFromEditor(startIndex int, posts []Post) (failedAt int, err error) {
-	if err := godotenv.Load(".env"); err != nil {
-		return 0, fmt.Errorf("load .env: %w", err)
-	}
+	loadEnvFromDotfile()
 	prepared := preparePostsForWP(posts)
 	if len(prepared) == 0 {
 		return 0, fmt.Errorf("no posts to upload")
