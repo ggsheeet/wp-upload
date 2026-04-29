@@ -157,7 +157,7 @@ func runWebServer() {
 	mux.HandleFunc("POST /api/upload", handleAPIUpload)
 	mux.Handle("/", http.FileServer(http.FS(static)))
 
-	addr := "127.0.0.1:8787"
+	addr := "127.0.0.1:8080"
 	if p := strings.TrimSpace(os.Getenv("WP_UPLOAD_WEB_ADDR")); p != "" {
 		addr = p
 	}
