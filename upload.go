@@ -17,12 +17,62 @@ import (
 
 var logger = NewColoredLogger("", nil)
 
+// wordPressContentFromRaw turns the body lines after "Image:" (plain text / newlines)
+// into Gutenberg blocks, matching the legacy execPosts behavior.
+func wordPressContentFromRaw(raw string) string {
+	var lines []string
+	for _, l := range strings.Split(raw, "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	contentCount := 0
+	for _, line := range lines {
+		if contentCount == 0 {
+			b.WriteString(fmt.Sprintf(`<!-- wp:paragraph --><p>%s</p><!-- /wp:paragraph -->`, line))
+			contentCount = 1
+			continue
+		}
+		if contentCount == 2 {
+			b.WriteString(fmt.Sprintf(`<!-- wp:paragraph --><p><a href="%s">Ver nota completa</a></p><!-- /wp:paragraph -->`, line))
+			contentCount = 3
+			continue
+		}
+		b.WriteString(fmt.Sprintf(`<!-- wp:paragraph --><p>%s</p><!-- /wp:paragraph -->`, line))
+		contentCount++
+	}
+	return b.String()
+}
+
+func preparePostsForWP(posts []Post) []Post {
+	out := make([]Post, len(posts))
+	for i := range posts {
+		out[i] = posts[i]
+		out[i].Title = strings.TrimSpace(posts[i].Title)
+		out[i].Category = strings.TrimSpace(posts[i].Category)
+		out[i].Image = strings.TrimSpace(posts[i].Image)
+		out[i].Content = wordPressContentFromRaw(posts[i].Content)
+	}
+	return out
+}
+
 func uploadPosts(startIndex int) {
 	if err := godotenv.Load(".env"); err != nil {
 		log.Fatal("Error loading .env file")
 	}
 
-	posts := execPosts("posts.txt")
+	posts, err := parsePosts("posts.txt")
+	if err != nil {
+		logger.Error("Error reading posts: %v", err)
+		return
+	}
+
+	posts = preparePostsForWP(posts)
 
 	if startIndex >= len(posts) {
 		logger.Error("Start index %d is out of range (total posts: %d)", startIndex, len(posts))
@@ -39,11 +89,52 @@ func uploadPosts(startIndex int) {
 	for i := startIndex; i < len(posts); i++ {
 		post := posts[i]
 		categoryID := getCategoryID(post.Category)
-		imageID := uploadFeaturedImage(post.Image, i, token)
-		createPost(post.Title, post.Content, categoryID, imageID, i, token)
+		imageID, err := uploadFeaturedImage(post.Image, i, token)
+		if err != nil {
+			logger.Error("%v. Resume with: go run . upload %d", err, i)
+			panic(err.Error())
+		}
+		if err := createPost(post.Title, post.Content, categoryID, imageID, i, token); err != nil {
+			logger.Error("%v. Resume with: go run . upload %d", err, i)
+			panic(err.Error())
+		}
 
 		logger.Info("[%d/%d] %s", i+1, len(posts), post.Title)
 	}
+}
+
+// UploadPostsFromEditor uploads posts parsed the same way as posts.txt (raw Content body).
+// Returns the 0-based index of the failed post and an error if any step fails.
+func UploadPostsFromEditor(startIndex int, posts []Post) (failedAt int, err error) {
+	if err := godotenv.Load(".env"); err != nil {
+		return 0, fmt.Errorf("load .env: %w", err)
+	}
+	prepared := preparePostsForWP(posts)
+	if len(prepared) == 0 {
+		return 0, fmt.Errorf("no posts to upload")
+	}
+	if startIndex < 0 || startIndex >= len(prepared) {
+		return 0, fmt.Errorf("start index %d out of range (posts: %d)", startIndex, len(prepared))
+	}
+
+	token, err := getJWTTokenE()
+	if err != nil {
+		return 0, err
+	}
+
+	for i := startIndex; i < len(prepared); i++ {
+		post := prepared[i]
+		categoryID := getCategoryID(post.Category)
+		imageID, err := uploadFeaturedImage(post.Image, i, token)
+		if err != nil {
+			return i, fmt.Errorf("post %d (%q): featured image: %w", i, post.Title, err)
+		}
+		if err := createPost(post.Title, post.Content, categoryID, imageID, i, token); err != nil {
+			return i, fmt.Errorf("post %d (%q): create post: %w", i, post.Title, err)
+		}
+		logger.Info("[%d/%d] %s", i+1, len(prepared), post.Title)
+	}
+	return -1, nil
 }
 
 func runUploadOnly(startIndex int) {
@@ -51,81 +142,46 @@ func runUploadOnly(startIndex int) {
 	logger.Info("Upload complete!")
 }
 
-func execPosts(filename string) []Post {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		panic(err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-	var posts []Post
-	var current Post
-	contentCount := 0
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		switch {
-		case strings.HasPrefix(line, "Title:"):
-			if current.Title != "" {
-				posts = append(posts, current)
-				current = Post{}
-			}
-			current.Title = strings.TrimSpace(strings.TrimPrefix(line, "Title:"))
-			contentCount = 0
-		case strings.HasPrefix(line, "Category:"):
-			current.Category = strings.TrimSpace(strings.TrimPrefix(line, "Category:"))
-		case strings.HasPrefix(line, "Image:"):
-			current.Image = strings.TrimSpace(strings.TrimPrefix(line, "Image:"))
-		default:
-			if current.Content != "" {
-				if contentCount == 2 {
-					current.Content += fmt.Sprintf(`<!-- wp:paragraph --><p><a href="%s">Ver nota completa</a></p><!-- /wp:paragraph -->`, line)
-				} else {
-					current.Content += fmt.Sprintf(`<!-- wp:paragraph --><p>%s</p><!-- /wp:paragraph -->`, line)
-				}
-				contentCount++
-			} else {
-				current.Content = fmt.Sprintf(`<!-- wp:paragraph --><p>%s</p><!-- /wp:paragraph -->`, line)
-				contentCount = 1
-			}
-		}
-	}
-	if current.Title != "" {
-		posts = append(posts, current)
-	}
-
-	return posts
-}
-
-func getJWTToken() string {
+func getJWTTokenE() (string, error) {
 	payload := strings.NewReader(fmt.Sprintf("username=%s&password=%s", os.Getenv("EMAIL"), os.Getenv("PASSWORD")))
-	req, _ := http.NewRequest("POST", "https://gen.boletindiario.in/wp-json/jwt-auth/v1/token", payload)
+	req, err := http.NewRequest("POST", "https://gen.boletindiario.in/wp-json/jwt-auth/v1/token", payload)
+	if err != nil {
+		return "", err
+	}
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 	defer res.Body.Close()
 
 	var result map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&result)
-
-	if token, exists := result["token"]; exists && token != nil {
-		return token.(string)
+	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
+		return "", err
 	}
 
-	if errorMsg, exists := result["message"]; exists {
-		logger.Error("JWT Authentication failed: %v", errorMsg)
-		panic(fmt.Sprintf("JWT Authentication failed: %v", errorMsg))
+	if token, ok := result["token"]; ok && token != nil {
+		s, _ := token.(string)
+		if s != "" {
+			return s, nil
+		}
 	}
 
-	logger.Error("JWT Authentication failed: No token received")
-	panic("JWT Authentication failed: No token received")
+	if errorMsg, ok := result["message"]; ok {
+		return "", fmt.Errorf("%v", errorMsg)
+	}
+
+	return "", fmt.Errorf("no token received")
+}
+
+func getJWTToken() string {
+	t, err := getJWTTokenE()
+	if err != nil {
+		logger.Error("JWT Authentication failed: %v", err)
+		panic(err.Error())
+	}
+	return t
 }
 
 func getCategoryID(childSlug string) int {
@@ -172,11 +228,10 @@ func getCategoryID(childSlug string) int {
 	return int(childCategories[0]["id"].(float64))
 }
 
-func uploadFeaturedImage(imageURL string, postIndex int, token string) int {
+func uploadFeaturedImage(imageURL string, postIndex int, token string) (int, error) {
 	req, err := http.NewRequest("GET", imageURL, nil)
 	if err != nil {
-		logger.Error("Failed to create image request for post %d: %v. Resume with: go run . upload %d", postIndex, err, postIndex)
-		panic(fmt.Sprintf("Failed to create request for post %d: %v", postIndex, err))
+		return 0, fmt.Errorf("create image request: %w", err)
 	}
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -184,17 +239,19 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) int {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.Error("Failed to fetch image for post %d: %v. Resume with: go run . upload %d", postIndex, err, postIndex)
-		panic(fmt.Sprintf("Failed to fetch image for post %d: %v", postIndex, err))
+		return 0, fmt.Errorf("fetch image: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		logger.Error("Failed to fetch image for post %d: HTTP %d. Resume with: go run . upload %d", postIndex, resp.StatusCode, postIndex)
-		panic(fmt.Sprintf("Failed to fetch image for post %d: HTTP %d", postIndex, resp.StatusCode))
+		return 0, fmt.Errorf("fetch image: HTTP %d", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("read image body: %w", err)
+	}
+
 	contentType := resp.Header.Get("Content-Type")
 
 	if contentType == "" {
@@ -213,8 +270,7 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) int {
 	}
 
 	if !strings.HasPrefix(contentType, "image/") {
-		logger.Error("URL for post %d is not an image (content-type: %s). Resume with: go run . upload %d", postIndex, contentType, postIndex)
-		panic(fmt.Sprintf("URL for post %d is not an image (content-type: %s)", postIndex, contentType))
+		return 0, fmt.Errorf("URL is not an image (content-type: %s)", contentType)
 	}
 
 	exts, _ := mime.ExtensionsByType(contentType)
@@ -228,8 +284,7 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) int {
 
 	uploadReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		logger.Error("Failed to create upload request for post %d: %v. Resume with: go run . upload %d", postIndex, err, postIndex)
-		panic(fmt.Sprintf("Failed to create upload request for post %d: %v", postIndex, err))
+		return 0, fmt.Errorf("create upload request: %w", err)
 	}
 	uploadReq.Header.Add("Authorization", "Bearer "+token)
 	uploadReq.Header.Add("Content-Type", contentType)
@@ -237,23 +292,27 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) int {
 
 	res, err := http.DefaultClient.Do(uploadReq)
 	if err != nil {
-		logger.Error("Failed to upload image for post %d: %v. Resume with: go run . upload %d", postIndex, err, postIndex)
-		panic(fmt.Sprintf("Failed to upload image for post %d: %v", postIndex, err))
+		return 0, fmt.Errorf("upload to media: %w", err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 201 {
-		logger.Error("Failed to upload image for post %d: HTTP %d. Resume with: go run . upload %d", postIndex, res.StatusCode, postIndex)
-		panic(fmt.Sprintf("Failed to upload image for post %d: HTTP %d", postIndex, res.StatusCode))
+		return 0, fmt.Errorf("upload to media: HTTP %d", res.StatusCode)
 	}
 
 	var uploaded map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&uploaded)
+	if err := json.NewDecoder(res.Body).Decode(&uploaded); err != nil {
+		return 0, fmt.Errorf("decode media response: %w", err)
+	}
+	id, ok := uploaded["id"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("media response missing id")
+	}
 
-	return int(uploaded["id"].(float64))
+	return int(id), nil
 }
 
-func createPost(title, content string, categoryID, imageID, postIndex int, token string) {
+func createPost(title, content string, categoryID, imageID, postIndex int, token string) error {
 	postData := map[string]interface{}{
 		"title":          title,
 		"content":        content,
@@ -270,25 +329,30 @@ func createPost(title, content string, categoryID, imageID, postIndex int, token
 		postData["tags"] = append(postData["tags"].([]int), 52)
 	}
 
-	jsonData, _ := json.Marshal(postData)
+	jsonData, err := json.Marshal(postData)
+	if err != nil {
+		return fmt.Errorf("marshal post: %w", err)
+	}
 
-	req, _ := http.NewRequest("POST", "https://gen.boletindiario.in/wp-json/wp/v2/posts", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", "https://gen.boletindiario.in/wp-json/wp/v2/posts", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
 	req.Header.Add("Authorization", "Bearer "+token)
 	req.Header.Add("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Error("Failed to create post %d: %v. Resume with: go run . upload %d", postIndex, err, postIndex)
-		panic(fmt.Sprintf("Failed to create post %d: %v", postIndex, err))
+		return fmt.Errorf("post request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 201 {
 		body, _ := io.ReadAll(resp.Body)
-		logger.Error("Failed to create post %d: HTTP %d. Resume with: go run . upload %d", postIndex, resp.StatusCode, postIndex)
 		logger.Debug("Response body: %s", string(body))
-		panic(fmt.Sprintf("Failed to create post %d: HTTP %d", postIndex, resp.StatusCode))
+		return fmt.Errorf("WordPress returned HTTP %d", resp.StatusCode)
 	}
+	return nil
 }
 
 func generateRandomFilename() string {

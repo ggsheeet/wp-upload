@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WP Upload</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --border: #2d3a4d;
+      --text: #e7edf5;
+      --muted: #8b9cb3;
+      --accent: #5b8def;
+      --accent-dim: #3d6bc4;
+      --ok: #3dcc85;
+      --err: #e85d5d;
+      --warn: #e6b84d;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 3rem;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin: 0 0 0.25rem;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    section h2 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin: 0 0 0.75rem;
+      font-weight: 600;
+    }
+    textarea, input[type="text"], input[type="url"], select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 0.65rem 0.75rem;
+      font-size: 0.9rem;
+      font-family: ui-monospace, "Cascadia Code", monospace;
+    }
+    textarea { min-height: 200px; resize: vertical; }
+    .drop {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-bottom: 0.75rem;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop.drag { border-color: var(--accent); background: rgba(91, 141, 239, 0.08); }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      margin-top: 0.75rem;
+    }
+    button {
+      appearance: none;
+      border: none;
+      border-radius: 8px;
+      padding: 0.55rem 1rem;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button.primary { background: var(--accent); color: #fff; }
+    button.primary:hover { background: var(--accent-dim); }
+    button.secondary { background: var(--border); color: var(--text); }
+    button.secondary:hover { filter: brightness(1.1); }
+    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .banner {
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      font-size: 0.88rem;
+      margin-top: 0.75rem;
+      display: none;
+    }
+    .banner.show { display: block; }
+    .banner.ok { background: rgba(61, 204, 133, 0.15); border: 1px solid rgba(61, 204, 133, 0.4); }
+    .banner.err { background: rgba(232, 93, 93, 0.12); border: 1px solid rgba(232, 93, 93, 0.35); }
+    .banner.warn { background: rgba(230, 184, 77, 0.12); border: 1px solid rgba(230, 184, 77, 0.35); }
+    .posts { display: flex; flex-direction: column; gap: 1rem; }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      background: rgba(0,0,0,0.15);
+    }
+    .card h3 {
+      margin: 0 0 0.75rem;
+      font-size: 0.95rem;
+      color: var(--accent);
+    }
+    .grid {
+      display: grid;
+      gap: 0.6rem;
+    }
+    @media (min-width: 640px) {
+      .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+    }
+    label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 0.2rem;
+    }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+    .resume {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.5rem;
+    }
+    .resume input { width: 5rem; font-family: inherit; }
+    .og-inline-msg {
+      font-size: 0.82rem;
+      margin-top: 0.55rem;
+      padding: 0.45rem 0.65rem;
+      border-radius: 8px;
+      line-height: 1.35;
+      display: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .og-inline-msg.show { display: block; }
+    .og-inline-msg.err {
+      background: rgba(232, 93, 93, 0.12);
+      border: 1px solid rgba(232, 93, 93, 0.35);
+      color: var(--text);
+    }
+    .og-inline-msg.warn {
+      background: rgba(230, 184, 77, 0.12);
+      border: 1px solid rgba(230, 184, 77, 0.35);
+      color: var(--text);
+    }
+    .og-inline-msg.ok {
+      background: rgba(61, 204, 133, 0.12);
+      border: 1px solid rgba(61, 204, 133, 0.35);
+      color: var(--text);
+    }
+    #bannerOgBatch ul {
+      margin: 0.4rem 0 0;
+      padding-left: 1.25rem;
+    }
+    #bannerOgBatch li { margin: 0.15rem 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>WordPress upload</h1>
+    <p class="sub">Paste or drop your text, parse into posts, fix anything, then upload. Same credentials as <code style="background:var(--surface);padding:0.1em 0.35em;border-radius:4px">.env</code> (run from project folder).</p>
+
+    <section>
+      <h2>1. Source text</h2>
+      <div class="drop" id="dropzone">Drop a .txt file here or paste below</div>
+      <textarea id="raw" placeholder="Paste posts.txt content, or raw bulletin text (use Format first for raw)…"></textarea>
+      <div class="row">
+        <button type="button" class="secondary" id="btnFormat">Format raw bulletin</button>
+        <button type="button" class="primary" id="btnParse">Parse into posts</button>
+        <button type="button" class="ghost" id="btnClear">Clear &amp; start over</button>
+      </div>
+      <div id="bannerSource" class="banner"></div>
+    </section>
+
+    <section id="postsSection" style="display:none">
+      <h2>2. Posts (edit as needed)</h2>
+      <p class="hint">Body should stay as three blocks: lead paragraph, source name, article URL (last line becomes “Ver nota completa”).</p>
+      <div class="row">
+        <button type="button" class="secondary" id="btnOgAll">Fetch OG images for all (uses URL field)</button>
+      </div>
+      <div id="bannerOgBatch" class="banner"></div>
+      <div id="posts" class="posts"></div>
+      <div class="row">
+        <button type="button" class="primary" id="btnUpload">Upload to WordPress</button>
+        <div class="resume">
+          <label for="startFrom">Resume from index (0-based)</label>
+          <input type="number" id="startFrom" min="0" value="0" />
+        </div>
+      </div>
+      <div id="bannerUpload" class="banner"></div>
+    </section>
+  </div>
+
+  <datalist id="categories">
+    <option value="fiscal"></option>
+    <option value="laboral"></option>
+    <option value="comercio-exterior"></option>
+    <option value="nacional"></option>
+    <option value="empresas"></option>
+    <option value="finanzas"></option>
+    <option value="rse"></option>
+    <option value="menciones-icpnl"></option>
+  </datalist>
+
+  <script>
+    const rawEl = document.getElementById('raw');
+    const dropzone = document.getElementById('dropzone');
+    const postsEl = document.getElementById('posts');
+    const postsSection = document.getElementById('postsSection');
+    const bannerSource = document.getElementById('bannerSource');
+    const bannerOgBatch = document.getElementById('bannerOgBatch');
+    const bannerUpload = document.getElementById('bannerUpload');
+    let postsState = [];
+
+    function showBanner(el, kind, msg) {
+      el.className = 'banner show ' + (kind || '');
+      if (typeof msg === 'string') {
+        el.textContent = msg;
+      } else {
+        el.innerHTML = '';
+        el.appendChild(msg);
+      }
+    }
+    function hideBanner(el) {
+      el.className = 'banner';
+      el.textContent = '';
+      el.innerHTML = '';
+    }
+
+    function setInlineOgMsg(card, kind, text) {
+      let box = card.querySelector('.og-inline-msg');
+      if (!box) return;
+      if (!text) {
+        box.className = 'og-inline-msg';
+        box.textContent = '';
+        return;
+      }
+      box.className = 'og-inline-msg show ' + (kind || '');
+      box.textContent = text;
+    }
+
+    async function api(path, body) {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && !data.error) data.error = res.statusText;
+      return data;
+    }
+
+    document.getElementById('btnFormat').onclick = async () => {
+      hideBanner(bannerSource);
+      const text = rawEl.value.trim();
+      if (!text) {
+        showBanner(bannerSource, 'warn', 'Paste text first.');
+        return;
+      }
+      const data = await api('/api/format', { text });
+      if (data.error) {
+        showBanner(bannerSource, 'err', data.error);
+        return;
+      }
+      rawEl.value = data.formatted;
+      showBanner(bannerSource, 'ok', 'Formatted. Review text, then click Parse into posts.');
+    };
+
+    function renderPosts() {
+      postsEl.innerHTML = '';
+      postsState.forEach((p, i) => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <h3>Post ${i + 1}</h3>
+          <div class="grid cols-2">
+            <div>
+              <label>Title</label>
+              <input type="text" data-i="${i}" data-f="title" value="" />
+            </div>
+            <div>
+              <label>Category (slug)</label>
+              <input type="text" data-i="${i}" data-f="category" value="" list="categories" />
+            </div>
+            <div>
+              <label>Featured image URL</label>
+              <input type="url" data-i="${i}" data-f="image" value="" />
+            </div>
+            <div>
+              <label>Article URL (for OG + link)</label>
+              <input type="url" data-i="${i}" data-f="url" value="" />
+            </div>
+          </div>
+          <div style="margin-top:0.6rem">
+            <label>Body (after Image: in file)</label>
+            <textarea data-i="${i}" data-f="content" style="min-height:120px"></textarea>
+          </div>
+          <div class="row" style="margin-top:0.5rem">
+            <button type="button" class="secondary btn-og" data-i="${i}">Fetch OG image</button>
+            <button type="button" class="ghost btn-remove" data-i="${i}">Remove post</button>
+          </div>
+          <div class="og-inline-msg" data-role="og-msg"></div>
+        `;
+        postsEl.appendChild(card);
+        const inputs = card.querySelectorAll('[data-f]');
+        inputs.forEach((inp) => {
+          const field = inp.dataset.f;
+          const val = p[field] ?? '';
+          if (field === 'content') inp.value = val;
+          else inp.value = val;
+          inp.addEventListener('input', () => {
+            const idx = +inp.dataset.i;
+            postsState[idx][field] = inp.value;
+            postsState[idx].ogInline = null;
+            setInlineOgMsg(card, '', '');
+          });
+        });
+        const ogInline = postsState[i].ogInline;
+        if (ogInline && ogInline.text) {
+          setInlineOgMsg(card, ogInline.kind, ogInline.text);
+        }
+        card.querySelector('.btn-og').onclick = async (ev) => {
+          const idx = +ev.target.dataset.i;
+          const btn = ev.target;
+          const url = (postsState[idx].url || '').trim();
+          setInlineOgMsg(card, '', '');
+          postsState[idx].ogInline = null;
+          if (!url) {
+            const msg = 'Add an article URL above first.';
+            postsState[idx].ogInline = { kind: 'warn', text: msg };
+            setInlineOgMsg(card, 'warn', msg);
+            return;
+          }
+          btn.disabled = true;
+          const data = await api('/api/og', { url });
+          btn.disabled = false;
+          if (data.image) {
+            postsState[idx].image = data.image;
+            const im = card.querySelector('[data-f="image"]');
+            im.value = data.image;
+            const msg = 'OG image loaded.';
+            postsState[idx].ogInline = { kind: 'ok', text: msg };
+            setInlineOgMsg(card, 'ok', msg);
+          } else {
+            const errText = data.error || 'No OG image found.';
+            postsState[idx].ogInline = { kind: 'err', text: errText };
+            setInlineOgMsg(card, 'err', errText);
+          }
+        };
+        card.querySelector('.btn-remove').onclick = () => {
+          postsState.splice(i, 1);
+          renderPosts();
+          if (!postsState.length) postsSection.style.display = 'none';
+        };
+      });
+    }
+
+    document.getElementById('btnParse').onclick = async () => {
+      hideBanner(bannerSource);
+      hideBanner(bannerOgBatch);
+      hideBanner(bannerUpload);
+      const text = rawEl.value.trim();
+      if (!text) {
+        showBanner(bannerSource, 'warn', 'Paste or load text first.');
+        return;
+      }
+      const data = await api('/api/parse', { text });
+      if (data.error) {
+        showBanner(bannerSource, 'err', data.error);
+        return;
+      }
+      if (!data.posts || !data.posts.length) {
+        showBanner(bannerSource, 'warn', 'No posts found. Expected lines starting with "Title: ".');
+        return;
+      }
+      postsState = data.posts.map((x) => ({
+        title: x.title || '',
+        category: x.category || '',
+        image: x.image || '',
+        content: x.content || '',
+        url: x.url || '',
+        ogInline: null,
+      }));
+      postsSection.style.display = 'block';
+      document.getElementById('startFrom').value = '0';
+      renderPosts();
+      showBanner(bannerSource, 'ok', `${postsState.length} post(s) ready. Edit fields, then upload.`);
+    };
+
+    document.getElementById('btnOgAll').onclick = async () => {
+      hideBanner(bannerOgBatch);
+      const failures = [];
+      let skippedNoUrl = 0;
+      let okCount = 0;
+      const btnAll = document.getElementById('btnOgAll');
+      btnAll.disabled = true;
+
+      for (let i = 0; i < postsState.length; i++) {
+        postsState[i].ogInline = null;
+        const url = (postsState[i].url || '').trim();
+        const titleShort = (postsState[i].title || '').trim() || '(no title)';
+        if (!url) {
+          skippedNoUrl++;
+          continue;
+        }
+        const data = await api('/api/og', { url });
+        if (data.image) {
+          postsState[i].image = data.image;
+          okCount++;
+        } else {
+          const errText = data.error || 'No OG image found.';
+          failures.push({ index: i, title: titleShort, message: errText });
+          postsState[i].ogInline = { kind: 'err', text: errText };
+        }
+      }
+
+      btnAll.disabled = false;
+      renderPosts();
+
+      const frag = document.createDocumentFragment();
+
+      if (failures.length > 0) {
+        const head = document.createElement('p');
+        head.style.margin = '0 0 0.35rem';
+        head.textContent =
+          failures.length === 1
+            ? 'Could not retrieve an OG image for 1 article:'
+            : `Could not retrieve an OG image for ${failures.length} articles:`;
+        frag.appendChild(head);
+        const ul = document.createElement('ul');
+        failures.forEach((f) => {
+          const li = document.createElement('li');
+          li.textContent = `Post ${f.index + 1} — ${f.title}: ${f.message}`;
+          ul.appendChild(li);
+        });
+        frag.appendChild(ul);
+        const tail = document.createElement('p');
+        tail.style.margin = '0.35rem 0 0';
+        tail.style.fontSize = '0.85rem';
+        tail.style.color = 'var(--muted)';
+        const parts = [];
+        if (okCount) parts.push(`${okCount} succeeded`);
+        if (skippedNoUrl) parts.push(`${skippedNoUrl} skipped (no URL)`);
+        tail.textContent = parts.join(' · ');
+        frag.appendChild(tail);
+        showBanner(bannerOgBatch, 'err', frag);
+        return;
+      }
+
+      if (!postsState.length) {
+        hideBanner(bannerOgBatch);
+        return;
+      }
+
+      if (skippedNoUrl === postsState.length && okCount === 0) {
+        const p = document.createElement('p');
+        p.style.margin = '0';
+        p.textContent =
+          'No OG images fetched: every post is missing an article URL in the URL field.';
+        frag.appendChild(p);
+        showBanner(bannerOgBatch, 'warn', frag);
+        return;
+      }
+
+      if (failures.length === 0 && skippedNoUrl === 0) {
+        const p = document.createElement('p');
+        p.style.margin = '0';
+        p.textContent = `OG images updated for all ${okCount} post(s) with a URL.`;
+        frag.appendChild(p);
+        showBanner(bannerOgBatch, 'ok', frag);
+        return;
+      }
+
+      const p = document.createElement('p');
+      p.style.margin = '0';
+      p.textContent = `OG images updated for ${okCount} post(s). Skipped ${skippedNoUrl} without an article URL.`;
+      frag.appendChild(p);
+      showBanner(bannerOgBatch, 'ok', frag);
+    };
+
+    function ensureUrlInBody(content, url) {
+      const u = (url || '').trim();
+      if (!u) return content;
+      let lines = content.split('\n');
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      if (!lines.length) return u + '\n';
+      lines[lines.length - 1] = u;
+      return lines.join('\n') + '\n';
+    }
+
+    document.getElementById('btnUpload').onclick = async () => {
+      hideBanner(bannerUpload);
+      const startFrom = Math.max(0, parseInt(document.getElementById('startFrom').value, 10) || 0);
+      if (!postsState.length) {
+        showBanner(bannerUpload, 'warn', 'Parse posts first.');
+        return;
+      }
+      const payload = {
+        startFrom,
+        posts: postsState.map((p) => ({
+          title: p.title,
+          category: p.category,
+          image: p.image,
+          content: ensureUrlInBody(p.content, p.url),
+          url: p.url,
+        })),
+      };
+      document.getElementById('btnUpload').disabled = true;
+      const data = await api('/api/upload', payload);
+      document.getElementById('btnUpload').disabled = false;
+      if (data.ok) {
+        showBanner(bannerUpload, 'ok', 'Upload finished successfully.');
+        return;
+      }
+      showBanner(bannerUpload, 'err', `Stopped at index ${data.failedAt}: ${data.error}`);
+      document.getElementById('startFrom').value = String(data.failedAt);
+    };
+
+    document.getElementById('btnClear').onclick = () => {
+      rawEl.value = '';
+      postsState = [];
+      postsSection.style.display = 'none';
+      postsEl.innerHTML = '';
+      hideBanner(bannerSource);
+      hideBanner(bannerOgBatch);
+      hideBanner(bannerUpload);
+    };
+
+    ['dragenter', 'dragover'].forEach((ev) => {
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        dropzone.classList.add('drag');
+      });
+    });
+    ['dragleave', 'drop'].forEach((ev) => {
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('drag');
+      });
+    });
+    dropzone.addEventListener('drop', (e) => {
+      const f = e.dataTransfer.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        rawEl.value = r.result;
+        showBanner(bannerSource, 'ok', `Loaded ${f.name}`);
+      };
+      r.readAsText(f);
+    });
+  </script>
+</body>
+</html>

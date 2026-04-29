@@ -36,12 +36,19 @@ func parsePosts(filename string) ([]Post, error) {
 		return nil, err
 	}
 	defer file.Close()
+	return parsePostsReader(file)
+}
 
+func parsePostsString(text string) ([]Post, error) {
+	return parsePostsReader(strings.NewReader(text))
+}
+
+func parsePostsReader(r io.Reader) ([]Post, error) {
 	var posts []Post
 	var currentPost *Post
 	var contentBuilder strings.Builder
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -182,6 +189,7 @@ func main() {
 		logger.Info("  go run . upload     - Upload posts to WordPress")
 		logger.Info("  go run . upload N   - Resume upload from post N (0-based index)")
 		logger.Info("  go run . full       - Process OG images and upload (only if no errors)")
+		logger.Info("  go run . web        - Local web UI: paste posts, edit, upload")
 		return
 	}
 
@@ -206,9 +214,11 @@ func main() {
 		} else {
 			logger.Warning("OG image processing had errors. Please fix images manually and run 'go run . upload' when ready.")
 		}
+	case "web":
+		runWebServer()
 	default:
 		logger.Error("Unknown command: %s", command)
-		logger.Info("Use 'go run . process', 'go run . upload', or 'go run . full'")
+		logger.Info("Use 'go run . process', 'go run . upload', 'go run . web', or 'go run . full'")
 	}
 }
 

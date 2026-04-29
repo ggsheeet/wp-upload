@@ -4,8 +4,8 @@ build:
 run: build
 	@./bin/wp-upload
 
-format:
-	@go run . format
+web:
+	@go run . web
 
 process:
 	@go run . process
@@ -27,6 +27,7 @@ help:
 	@echo "  make upload      - Upload posts to WordPress from posts.txt"
 	@echo "  make upload-from N=X - Resume upload from post X (0-based index)"
 	@echo "  make full        - Process OG images and upload (only if no errors)"
+	@echo "  make web         - Local web UI to paste, edit, upload"
 	@echo "  make build       - Build the binary"
 	@echo "  make help        - Show this help"
 
