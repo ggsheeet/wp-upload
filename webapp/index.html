@@ -178,6 +178,61 @@
       padding-left: 1.25rem;
     }
     #bannerOgBatch li { margin: 0.15rem 0; }
+    @keyframes upload-spin {
+      to { transform: rotate(360deg); }
+    }
+    .upload-progress {
+      display: none;
+      margin-top: 0.75rem;
+      padding: 0.85rem 1rem;
+      background: rgba(0,0,0,0.22);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .upload-progress.show { display: block; }
+    .upload-progress-head {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+    .upload-spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: upload-spin 0.65s linear infinite;
+      flex-shrink: 0;
+    }
+    .upload-progress-label {
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+    .upload-progress-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      margin: 0.5rem 0 0.15rem;
+      line-height: 1.35;
+    }
+    .upload-progress-track {
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      margin-top: 0.55rem;
+      overflow: hidden;
+    }
+    .upload-progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      width: 0%;
+      transition: width 0.25s ease;
+    }
+    .card.card-uploading {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(91, 141, 239, 0.35);
+    }
   </style>
 </head>
 <body>
@@ -212,6 +267,16 @@
           <input type="number" id="startFrom" min="0" value="0" />
         </div>
       </div>
+      <div id="uploadProgress" class="upload-progress" aria-live="polite" aria-busy="false">
+        <div class="upload-progress-head">
+          <span class="upload-spinner" aria-hidden="true"></span>
+          <span class="upload-progress-label" id="uploadProgressLabel">Preparing upload…</span>
+        </div>
+        <div class="upload-progress-title" id="uploadProgressTitle"></div>
+        <div class="upload-progress-track">
+          <div class="upload-progress-fill" id="uploadProgressBar"></div>
+        </div>
+      </div>
       <div id="bannerUpload" class="banner"></div>
     </section>
   </div>
@@ -235,6 +300,10 @@
     const bannerSource = document.getElementById('bannerSource');
     const bannerOgBatch = document.getElementById('bannerOgBatch');
     const bannerUpload = document.getElementById('bannerUpload');
+    const uploadProgressEl = document.getElementById('uploadProgress');
+    const uploadProgressLabel = document.getElementById('uploadProgressLabel');
+    const uploadProgressTitle = document.getElementById('uploadProgressTitle');
+    const uploadProgressBar = document.getElementById('uploadProgressBar');
     let postsState = [];
 
     function showBanner(el, kind, msg) {
@@ -296,6 +365,7 @@
       postsState.forEach((p, i) => {
         const card = document.createElement('div');
         card.className = 'card';
+        card.dataset.postIdx = String(i);
         card.innerHTML = `
           <h3>Post ${i + 1}</h3>
           <div class="grid cols-2">
@@ -513,6 +583,46 @@
       return lines.join('\n') + '\n';
     }
 
+    function setUploadProgressVisible(show) {
+      if (!uploadProgressEl) return;
+      if (show) {
+        uploadProgressEl.classList.add('show');
+        uploadProgressEl.setAttribute('aria-busy', 'true');
+      } else {
+        uploadProgressEl.classList.remove('show');
+        uploadProgressEl.setAttribute('aria-busy', 'false');
+        uploadProgressBar.style.width = '0%';
+        uploadProgressTitle.textContent = '';
+        uploadProgressLabel.textContent = '';
+      }
+    }
+
+    function updateUploadProgress(step, total, title) {
+      const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
+      uploadProgressBar.style.width = pct + '%';
+      uploadProgressLabel.textContent = `Uploading ${step} of ${total}…`;
+      uploadProgressTitle.textContent = title || '(no title)';
+    }
+
+    function setCardUploading(index) {
+      postsEl.querySelectorAll('.card').forEach((c) => c.classList.remove('card-uploading'));
+      const card = postsEl.querySelector(`.card[data-post-idx="${index}"]`);
+      if (card) {
+        card.classList.add('card-uploading');
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    function postPayloadFromState(p) {
+      return {
+        title: p.title,
+        category: p.category,
+        image: p.image,
+        content: ensureUrlInBody(p.content, p.url),
+        url: p.url,
+      };
+    }
+
     document.getElementById('btnUpload').onclick = async () => {
       hideBanner(bannerUpload);
       const startFrom = Math.max(0, parseInt(document.getElementById('startFrom').value, 10) || 0);
@@ -520,25 +630,62 @@
         showBanner(bannerUpload, 'warn', 'Parse posts first.');
         return;
       }
-      const payload = {
-        startFrom,
-        posts: postsState.map((p) => ({
-          title: p.title,
-          category: p.category,
-          image: p.image,
-          content: ensureUrlInBody(p.content, p.url),
-          url: p.url,
-        })),
-      };
-      document.getElementById('btnUpload').disabled = true;
-      const data = await api('/api/upload', payload);
-      document.getElementById('btnUpload').disabled = false;
-      if (data.ok) {
-        showBanner(bannerUpload, 'ok', 'Upload finished successfully.');
+      if (startFrom >= postsState.length) {
+        showBanner(bannerUpload, 'warn', 'Start index is past the last post.');
         return;
       }
-      showBanner(bannerUpload, 'err', `Stopped at index ${data.failedAt}: ${data.error}`);
-      document.getElementById('startFrom').value = String(data.failedAt);
+
+      const n = postsState.length;
+      const totalToUpload = n - startFrom;
+      const btnUpload = document.getElementById('btnUpload');
+      const btnOgAll = document.getElementById('btnOgAll');
+
+      const lockUI = (on) => {
+        btnUpload.disabled = on;
+        btnOgAll.disabled = on;
+        document.getElementById('btnParse').disabled = on;
+        document.getElementById('btnFormat').disabled = on;
+        document.getElementById('btnClear').disabled = on;
+        postsEl.querySelectorAll('.btn-og, .btn-remove').forEach((b) => {
+          b.disabled = on;
+        });
+      };
+
+      lockUI(true);
+      setUploadProgressVisible(true);
+      let completed = false;
+
+      try {
+        for (let i = startFrom; i < n; i++) {
+          const title = (postsState[i].title || '').trim() || '(no title)';
+          const step = i - startFrom + 1;
+          updateUploadProgress(step, totalToUpload, title);
+          setCardUploading(i);
+
+          const payload = { startFrom: 0, posts: [postPayloadFromState(postsState[i])] };
+          const data = await api('/api/upload', payload);
+          if (!data.ok) {
+            showBanner(
+              bannerUpload,
+              'err',
+              `Stopped at post ${i + 1} of ${n} (${title}): ${data.error || 'unknown error'}`
+            );
+            document.getElementById('startFrom').value = String(i);
+            return;
+          }
+        }
+        completed = true;
+        uploadProgressBar.style.width = '100%';
+        uploadProgressLabel.textContent = 'Finished';
+        showBanner(bannerUpload, 'ok', `Uploaded ${totalToUpload} post(s) successfully.`);
+        document.getElementById('startFrom').value = '0';
+      } catch (e) {
+        showBanner(bannerUpload, 'err', e instanceof Error ? e.message : 'Upload failed unexpectedly.');
+      } finally {
+        lockUI(false);
+        postsEl.querySelectorAll('.card').forEach((c) => c.classList.remove('card-uploading'));
+        setTimeout(() => setUploadProgressVisible(false), completed ? 900 : 400);
+      }
     };
 
     document.getElementById('btnClear').onclick = () => {

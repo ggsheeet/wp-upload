@@ -229,6 +229,78 @@ func getCategoryID(childSlug string) int {
 	return int(childCategories[0]["id"].(float64))
 }
 
+// sniffImageFromMagicBytes detects the real image format from file headers. CDNs often
+// send misleading Content-Type, and URLs may say .jpg while bytes are WebP, AVIF, etc.
+// Your WordPress can allow WebP/AVIF; REST upload still rejects when the declared
+// Content-Type/filename does not match the real file bytes.
+func sniffImageFromMagicBytes(b []byte) (contentType string, ext string, ok bool) {
+	if len(b) < 12 {
+		return "", "", false
+	}
+	switch {
+	case b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF:
+		return "image/jpeg", ".jpg", true
+	case len(b) >= 8 && string(b[0:8]) == "\x89PNG\r\n\x1a\n":
+		return "image/png", ".png", true
+	case len(b) >= 6 && (string(b[0:6]) == "GIF87a" || string(b[0:6]) == "GIF89a"):
+		return "image/gif", ".gif", true
+	case string(b[0:4]) == "RIFF" && string(b[8:12]) == "WEBP":
+		return "image/webp", ".webp", true
+	case string(b[4:8]) == "ftyp":
+		brand := string(b[8:12])
+		if brand == "avif" || brand == "avis" {
+			return "image/avif", ".avif", true
+		}
+		if len(b) >= 16 {
+			boxSize := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+			if boxSize >= 16 && int(boxSize) <= len(b) {
+				inner := b[12:boxSize]
+				if bytes.Contains(inner, []byte("avif")) || bytes.Contains(inner, []byte("avis")) {
+					return "image/avif", ".avif", true
+				}
+			}
+		}
+		return "", "", false
+	default:
+		return "", "", false
+	}
+}
+
+func mimeFromContentTypeHeader(h string) string {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return ""
+	}
+	if i := strings.Index(h, ";"); i >= 0 {
+		h = strings.TrimSpace(h[:i])
+	}
+	return h
+}
+
+func imageURLPathForSuffix(raw string) string {
+	if i := strings.Index(raw, "?"); i >= 0 {
+		raw = raw[:i]
+	}
+	return strings.ToLower(raw)
+}
+
+func guessImageFromURLPath(path string) (contentType string, ok bool) {
+	switch {
+	case strings.HasSuffix(path, ".avif"):
+		return "image/avif", true
+	case strings.HasSuffix(path, ".webp"):
+		return "image/webp", true
+	case strings.HasSuffix(path, ".png"):
+		return "image/png", true
+	case strings.HasSuffix(path, ".gif"):
+		return "image/gif", true
+	case strings.HasSuffix(path, ".jpg"), strings.HasSuffix(path, ".jpeg"), strings.HasSuffix(path, ".jpe"):
+		return "image/jpeg", true
+	default:
+		return "", false
+	}
+}
+
 func uploadFeaturedImage(imageURL string, postIndex int, token string) (int, error) {
 	req, err := http.NewRequest("GET", imageURL, nil)
 	if err != nil {
@@ -253,31 +325,32 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) (int, err
 		return 0, fmt.Errorf("read image body: %w", err)
 	}
 
-	contentType := resp.Header.Get("Content-Type")
+	headerCT := mimeFromContentTypeHeader(resp.Header.Get("Content-Type"))
+	sniffCT, sniffExt, sniffed := sniffImageFromMagicBytes(body)
 
-	if contentType == "" {
-		if strings.HasSuffix(strings.ToLower(imageURL), ".webp") {
-			contentType = "image/webp"
-		} else if strings.HasSuffix(strings.ToLower(imageURL), ".jpg") || strings.HasSuffix(strings.ToLower(imageURL), ".jpeg") {
-			contentType = "image/jpeg"
-		} else if strings.HasSuffix(strings.ToLower(imageURL), ".png") {
-			contentType = "image/png"
-		} else if strings.HasSuffix(strings.ToLower(imageURL), ".gif") {
-			contentType = "image/gif"
-		} else {
-			contentType = "image/jpeg"
+	var contentType string
+	var ext string
+	if sniffed {
+		contentType, ext = sniffCT, sniffExt
+		if headerCT != "" && !strings.EqualFold(headerCT, sniffCT) {
+			logger.Debug("Image: declared Content-Type %q differs from file signature %q (%s)", headerCT, sniffCT, imageURL)
 		}
-		logger.Debug("Content-type detected from URL: %s", contentType)
-	}
-
-	if !strings.HasPrefix(contentType, "image/") {
-		return 0, fmt.Errorf("URL is not an image (content-type: %s)", contentType)
-	}
-
-	exts, _ := mime.ExtensionsByType(contentType)
-	ext := ".jpg"
-	if len(exts) > 0 {
-		ext = exts[0]
+	} else {
+		contentType = headerCT
+		if !strings.HasPrefix(contentType, "image/") {
+			if g, ok := guessImageFromURLPath(imageURLPathForSuffix(imageURL)); ok {
+				contentType = g
+				logger.Debug("Image: using type %q from URL path (%s)", contentType, imageURL)
+			}
+		}
+		if !strings.HasPrefix(contentType, "image/") {
+			return 0, fmt.Errorf("URL is not an image (Content-Type %q); if the URL is valid, the host may need different headers", headerCT)
+		}
+		exts, _ := mime.ExtensionsByType(contentType)
+		ext = ".jpg"
+		if len(exts) > 0 {
+			ext = exts[0]
+		}
 	}
 
 	fileName := generateRandomFilename() + ext
@@ -297,12 +370,35 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) (int, err
 	}
 	defer res.Body.Close()
 
+	respBytes, err := io.ReadAll(res.Body)
+	if err != nil {
+		return 0, fmt.Errorf("read media response: %w", err)
+	}
+
 	if res.StatusCode != 201 {
-		return 0, fmt.Errorf("upload to media: HTTP %d", res.StatusCode)
+		msg := strings.TrimSpace(string(respBytes))
+		if len(msg) > 800 {
+			msg = msg[:800] + "…"
+		}
+		var wrap struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		}
+		if json.Unmarshal(respBytes, &wrap) == nil && wrap.Message != "" {
+			detail := wrap.Message
+			if wrap.Code != "" {
+				detail = wrap.Code + ": " + detail
+			}
+			return 0, fmt.Errorf("upload to media: HTTP %d — %s", res.StatusCode, detail)
+		}
+		if msg != "" {
+			return 0, fmt.Errorf("upload to media: HTTP %d — %s", res.StatusCode, msg)
+		}
+		return 0, fmt.Errorf("upload to media: HTTP %d (empty body)", res.StatusCode)
 	}
 
 	var uploaded map[string]interface{}
-	if err := json.NewDecoder(res.Body).Decode(&uploaded); err != nil {
+	if err := json.Unmarshal(respBytes, &uploaded); err != nil {
 		return 0, fmt.Errorf("decode media response: %w", err)
 	}
 	id, ok := uploaded["id"].(float64)
