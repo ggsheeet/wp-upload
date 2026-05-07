@@ -113,7 +113,7 @@
     .banner.ok { background: rgba(61, 204, 133, 0.15); border: 1px solid rgba(61, 204, 133, 0.4); }
     .banner.err { background: rgba(232, 93, 93, 0.12); border: 1px solid rgba(232, 93, 93, 0.35); }
     .banner.warn { background: rgba(230, 184, 77, 0.12); border: 1px solid rgba(230, 184, 77, 0.35); }
-    .posts { display: flex; flex-direction: column; gap: 1rem; }
+    .posts { display: flex; flex-direction: column; gap: 1rem; margin-top: 0.75rem; }
     .card {
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -233,6 +233,30 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 1px rgba(91, 141, 239, 0.35);
     }
+    .card.card-og-fetching {
+      border-color: var(--accent-dim);
+      box-shadow: 0 0 0 1px rgba(61, 107, 196, 0.35);
+    }
+    .og-inline-msg.loading {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(91, 141, 239, 0.08);
+      border: 1px solid rgba(91, 141, 239, 0.35);
+      color: var(--muted);
+    }
+    .og-mini-spin {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: upload-spin 0.65s linear infinite;
+      flex-shrink: 0;
+    }
+    .og-fetch-panel {
+      margin: 0.75rem 0;
+    }
   </style>
 </head>
 <body>
@@ -257,6 +281,16 @@
       <p class="hint">Body should stay as three blocks: lead paragraph, source name, article URL (last line becomes “Ver nota completa”).</p>
       <div class="row">
         <button type="button" class="secondary" id="btnOgAll">Fetch OG images for all (uses URL field)</button>
+      </div>
+      <div id="ogFetchProgress" class="upload-progress og-fetch-panel" aria-live="polite" aria-busy="false">
+        <div class="upload-progress-head">
+          <span class="upload-spinner" aria-hidden="true"></span>
+          <span class="upload-progress-label" id="ogFetchProgressLabel"></span>
+        </div>
+        <div class="upload-progress-title" id="ogFetchProgressTitle"></div>
+        <div class="upload-progress-track">
+          <div class="upload-progress-fill" id="ogFetchProgressBar"></div>
+        </div>
       </div>
       <div id="bannerOgBatch" class="banner"></div>
       <div id="posts" class="posts"></div>
@@ -304,6 +338,10 @@
     const uploadProgressLabel = document.getElementById('uploadProgressLabel');
     const uploadProgressTitle = document.getElementById('uploadProgressTitle');
     const uploadProgressBar = document.getElementById('uploadProgressBar');
+    const ogFetchProgressEl = document.getElementById('ogFetchProgress');
+    const ogFetchProgressLabel = document.getElementById('ogFetchProgressLabel');
+    const ogFetchProgressTitle = document.getElementById('ogFetchProgressTitle');
+    const ogFetchProgressBar = document.getElementById('ogFetchProgressBar');
     let postsState = [];
 
     function showBanner(el, kind, msg) {
@@ -322,11 +360,17 @@
     }
 
     function setInlineOgMsg(card, kind, text) {
-      let box = card.querySelector('.og-inline-msg');
+      const box = card.querySelector('.og-inline-msg');
       if (!box) return;
+      if (kind === 'loading') {
+        box.className = 'og-inline-msg show loading';
+        box.innerHTML =
+          '<span class="og-mini-spin" aria-hidden="true"></span><span>Fetching Open Graph image…</span>';
+        return;
+      }
+      box.innerHTML = '';
       if (!text) {
         box.className = 'og-inline-msg';
-        box.textContent = '';
         return;
       }
       box.className = 'og-inline-msg show ' + (kind || '');
@@ -426,20 +470,31 @@
             setInlineOgMsg(card, 'warn', msg);
             return;
           }
+          const prevLabel = btn.textContent;
           btn.disabled = true;
-          const data = await api('/api/og', { url });
-          btn.disabled = false;
-          if (data.image) {
-            postsState[idx].image = data.image;
-            const im = card.querySelector('[data-f="image"]');
-            im.value = data.image;
-            const msg = 'OG image loaded.';
-            postsState[idx].ogInline = { kind: 'ok', text: msg };
-            setInlineOgMsg(card, 'ok', msg);
-          } else {
-            const errText = data.error || 'No OG image found.';
+          btn.textContent = 'Fetching…';
+          setInlineOgMsg(card, 'loading');
+          try {
+            const data = await api('/api/og', { url });
+            if (data.image) {
+              postsState[idx].image = data.image;
+              const im = card.querySelector('[data-f="image"]');
+              im.value = data.image;
+              const msg = 'OG image loaded.';
+              postsState[idx].ogInline = { kind: 'ok', text: msg };
+              setInlineOgMsg(card, 'ok', msg);
+            } else {
+              const errText = data.error || 'No OG image found.';
+              postsState[idx].ogInline = { kind: 'err', text: errText };
+              setInlineOgMsg(card, 'err', errText);
+            }
+          } catch (e) {
+            const errText = e instanceof Error ? e.message : 'Request failed.';
             postsState[idx].ogInline = { kind: 'err', text: errText };
             setInlineOgMsg(card, 'err', errText);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
           }
         };
         card.querySelector('.btn-remove').onclick = () => {
@@ -480,7 +535,29 @@
       document.getElementById('startFrom').value = '0';
       renderPosts();
       showBanner(bannerSource, 'ok', `${postsState.length} post(s) ready. Edit fields, then upload.`);
+      setOgBatchProgressVisible(false);
     };
+
+    function setOgBatchProgressVisible(show) {
+      if (!ogFetchProgressEl) return;
+      if (show) {
+        ogFetchProgressEl.classList.add('show');
+        ogFetchProgressEl.setAttribute('aria-busy', 'true');
+      } else {
+        ogFetchProgressEl.classList.remove('show');
+        ogFetchProgressEl.setAttribute('aria-busy', 'false');
+        ogFetchProgressBar.style.width = '0%';
+        ogFetchProgressTitle.textContent = '';
+        ogFetchProgressLabel.textContent = '';
+      }
+    }
+
+    function updateOgBatchProgress(step, total, title) {
+      const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
+      ogFetchProgressBar.style.width = pct + '%';
+      ogFetchProgressLabel.textContent = `Fetching OG ${step} of ${total}…`;
+      ogFetchProgressTitle.textContent = title || '(no title)';
+    }
 
     document.getElementById('btnOgAll').onclick = async () => {
       hideBanner(bannerOgBatch);
@@ -488,28 +565,55 @@
       let skippedNoUrl = 0;
       let okCount = 0;
       const btnAll = document.getElementById('btnOgAll');
-      btnAll.disabled = true;
 
+      const indicesWithUrl = [];
       for (let i = 0; i < postsState.length; i++) {
-        postsState[i].ogInline = null;
-        const url = (postsState[i].url || '').trim();
-        const titleShort = (postsState[i].title || '').trim() || '(no title)';
-        if (!url) {
-          skippedNoUrl++;
-          continue;
+        if ((postsState[i].url || '').trim()) indicesWithUrl.push(i);
+        else skippedNoUrl++;
+      }
+      const totalFetch = indicesWithUrl.length;
+
+      btnAll.disabled = true;
+      postsEl.querySelectorAll('.btn-og').forEach((b) => {
+        b.disabled = true;
+      });
+      if (totalFetch > 0) setOgBatchProgressVisible(true);
+
+      try {
+        let step = 0;
+        for (const i of indicesWithUrl) {
+          step++;
+          postsState[i].ogInline = null;
+          const titleShort = (postsState[i].title || '').trim() || '(no title)';
+          updateOgBatchProgress(step, totalFetch, titleShort);
+          postsEl.querySelectorAll('.card').forEach((c) => c.classList.remove('card-og-fetching'));
+          const card = postsEl.querySelector(`.card[data-post-idx="${i}"]`);
+          if (card) card.classList.add('card-og-fetching');
+
+          const url = (postsState[i].url || '').trim();
+          const data = await api('/api/og', { url });
+          if (data.image) {
+            postsState[i].image = data.image;
+            okCount++;
+          } else {
+            const errText = data.error || 'No OG image found.';
+            failures.push({ index: i, title: titleShort, message: errText });
+            postsState[i].ogInline = { kind: 'err', text: errText };
+          }
         }
-        const data = await api('/api/og', { url });
-        if (data.image) {
-          postsState[i].image = data.image;
-          okCount++;
-        } else {
-          const errText = data.error || 'No OG image found.';
-          failures.push({ index: i, title: titleShort, message: errText });
-          postsState[i].ogInline = { kind: 'err', text: errText };
+        if (totalFetch > 0) {
+          ogFetchProgressBar.style.width = '100%';
+          ogFetchProgressLabel.textContent = 'OG fetch pass complete';
         }
+      } finally {
+        btnAll.disabled = false;
+        postsEl.querySelectorAll('.btn-og').forEach((b) => {
+          b.disabled = false;
+        });
+        postsEl.querySelectorAll('.card').forEach((c) => c.classList.remove('card-og-fetching'));
+        setTimeout(() => setOgBatchProgressVisible(false), totalFetch > 0 ? 500 : 0);
       }
 
-      btnAll.disabled = false;
       renderPosts();
 
       const frag = document.createDocumentFragment();
@@ -607,10 +711,7 @@
     function setCardUploading(index) {
       postsEl.querySelectorAll('.card').forEach((c) => c.classList.remove('card-uploading'));
       const card = postsEl.querySelector(`.card[data-post-idx="${index}"]`);
-      if (card) {
-        card.classList.add('card-uploading');
-        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
+      if (card) card.classList.add('card-uploading');
     }
 
     function postPayloadFromState(p) {
@@ -696,6 +797,7 @@
       hideBanner(bannerSource);
       hideBanner(bannerOgBatch);
       hideBanner(bannerUpload);
+      setOgBatchProgressVisible(false);
     };
 
     ['dragenter', 'dragover'].forEach((ev) => {
