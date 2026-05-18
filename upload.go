@@ -144,14 +144,20 @@ func runUploadOnly(startIndex int) {
 }
 
 func getJWTTokenE() (string, error) {
-	payload := strings.NewReader(fmt.Sprintf("username=%s&password=%s", os.Getenv("EMAIL"), os.Getenv("PASSWORD")))
-	req, err := http.NewRequest("POST", "https://gen.boletindiario.in/wp-json/jwt-auth/v1/token", payload)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	tokenURL := "https://gen.boletindiario.in/wp-json/jwt-auth/v1/token"
+	form := fmt.Sprintf("username=%s&password=%s", os.Getenv("EMAIL"), os.Getenv("PASSWORD"))
 
-	res, err := http.DefaultClient.Do(req)
+	var res *http.Response
+	err := withHTTPRetry(func() error {
+		req, reqErr := http.NewRequest("POST", tokenURL, strings.NewReader(form))
+		if reqErr != nil {
+			return reqErr
+		}
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		var doErr error
+		res, doErr = wordPressHTTPClient().Do(req)
+		return doErr
+	})
 	if err != nil {
 		return "", err
 	}
@@ -309,16 +315,26 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) (int, err
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	var resp *http.Response
+	err = withHTTPRetry(func() error {
+		var doErr error
+		resp, doErr = wordPressHTTPClient().Do(req)
+		if doErr != nil {
+			return doErr
+		}
+		if resp.StatusCode != 200 {
+			if isRetryableHTTPStatus(resp.StatusCode) {
+				resp.Body.Close()
+				return markRetryable(fmt.Errorf("fetch image: HTTP %d", resp.StatusCode))
+			}
+			return fmt.Errorf("fetch image: HTTP %d", resp.StatusCode)
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("fetch image: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return 0, fmt.Errorf("fetch image: HTTP %d", resp.StatusCode)
-	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -356,57 +372,68 @@ func uploadFeaturedImage(imageURL string, postIndex int, token string) (int, err
 	fileName := generateRandomFilename() + ext
 	url := "https://gen.boletindiario.in/wp-json/wp/v2/media"
 
-	uploadReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return 0, fmt.Errorf("create upload request: %w", err)
-	}
-	uploadReq.Header.Add("Authorization", "Bearer "+token)
-	uploadReq.Header.Add("Content-Type", contentType)
-	uploadReq.Header.Add("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	var mediaID int
+	err = withHTTPRetry(func() error {
+		uploadReq, reqErr := http.NewRequest("POST", url, bytes.NewReader(body))
+		if reqErr != nil {
+			return reqErr
+		}
+		uploadReq.Header.Add("Authorization", "Bearer "+token)
+		uploadReq.Header.Add("Content-Type", contentType)
+		uploadReq.Header.Add("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
 
-	res, err := http.DefaultClient.Do(uploadReq)
+		res, doErr := wordPressHTTPClient().Do(uploadReq)
+		if doErr != nil {
+			return doErr
+		}
+		defer res.Body.Close()
+
+		respBytes, readErr := io.ReadAll(res.Body)
+		if readErr != nil {
+			return readErr
+		}
+
+		if res.StatusCode != 201 {
+			if isRetryableHTTPStatus(res.StatusCode) {
+				return markRetryable(fmt.Errorf("upload to media: HTTP %d", res.StatusCode))
+			}
+			msg := strings.TrimSpace(string(respBytes))
+			if len(msg) > 800 {
+				msg = msg[:800] + "…"
+			}
+			var wrap struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			}
+			if json.Unmarshal(respBytes, &wrap) == nil && wrap.Message != "" {
+				detail := wrap.Message
+				if wrap.Code != "" {
+					detail = wrap.Code + ": " + detail
+				}
+				return fmt.Errorf("upload to media: HTTP %d — %s", res.StatusCode, detail)
+			}
+			if msg != "" {
+				return fmt.Errorf("upload to media: HTTP %d — %s", res.StatusCode, msg)
+			}
+			return fmt.Errorf("upload to media: HTTP %d (empty body)", res.StatusCode)
+		}
+
+		var uploaded map[string]interface{}
+		if jsonErr := json.Unmarshal(respBytes, &uploaded); jsonErr != nil {
+			return fmt.Errorf("decode media response: %w", jsonErr)
+		}
+		id, ok := uploaded["id"].(float64)
+		if !ok {
+			return fmt.Errorf("media response missing id")
+		}
+		mediaID = int(id)
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("upload to media: %w", err)
 	}
-	defer res.Body.Close()
 
-	respBytes, err := io.ReadAll(res.Body)
-	if err != nil {
-		return 0, fmt.Errorf("read media response: %w", err)
-	}
-
-	if res.StatusCode != 201 {
-		msg := strings.TrimSpace(string(respBytes))
-		if len(msg) > 800 {
-			msg = msg[:800] + "…"
-		}
-		var wrap struct {
-			Message string `json:"message"`
-			Code    string `json:"code"`
-		}
-		if json.Unmarshal(respBytes, &wrap) == nil && wrap.Message != "" {
-			detail := wrap.Message
-			if wrap.Code != "" {
-				detail = wrap.Code + ": " + detail
-			}
-			return 0, fmt.Errorf("upload to media: HTTP %d — %s", res.StatusCode, detail)
-		}
-		if msg != "" {
-			return 0, fmt.Errorf("upload to media: HTTP %d — %s", res.StatusCode, msg)
-		}
-		return 0, fmt.Errorf("upload to media: HTTP %d (empty body)", res.StatusCode)
-	}
-
-	var uploaded map[string]interface{}
-	if err := json.Unmarshal(respBytes, &uploaded); err != nil {
-		return 0, fmt.Errorf("decode media response: %w", err)
-	}
-	id, ok := uploaded["id"].(float64)
-	if !ok {
-		return 0, fmt.Errorf("media response missing id")
-	}
-
-	return int(id), nil
+	return mediaID, nil
 }
 
 func createPost(title, content string, categoryID, imageID, postIndex int, token string) error {
@@ -431,23 +458,33 @@ func createPost(title, content string, categoryID, imageID, postIndex int, token
 		return fmt.Errorf("marshal post: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", "https://gen.boletindiario.in/wp-json/wp/v2/posts", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Add("Authorization", "Bearer "+token)
-	req.Header.Add("Content-Type", "application/json")
+	postURL := "https://gen.boletindiario.in/wp-json/wp/v2/posts"
+	err = withHTTPRetry(func() error {
+		req, reqErr := http.NewRequest("POST", postURL, bytes.NewReader(jsonData))
+		if reqErr != nil {
+			return fmt.Errorf("create request: %w", reqErr)
+		}
+		req.Header.Add("Authorization", "Bearer "+token)
+		req.Header.Add("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("post request: %w", err)
-	}
-	defer resp.Body.Close()
+		resp, doErr := wordPressHTTPClient().Do(req)
+		if doErr != nil {
+			return doErr
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != 201 {
+		if resp.StatusCode == 201 {
+			return nil
+		}
 		body, _ := io.ReadAll(resp.Body)
 		logger.Debug("Response body: %s", string(body))
+		if isRetryableHTTPStatus(resp.StatusCode) {
+			return markRetryable(fmt.Errorf("WordPress returned HTTP %d", resp.StatusCode))
+		}
 		return fmt.Errorf("WordPress returned HTTP %d", resp.StatusCode)
+	})
+	if err != nil {
+		return fmt.Errorf("post request: %w", err)
 	}
 	return nil
 }
