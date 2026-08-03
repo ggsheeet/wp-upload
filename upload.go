@@ -441,16 +441,9 @@ func createPost(title, content string, categoryID, imageID, postIndex int, token
 		"title":          title,
 		"content":        content,
 		"categories":     []int{categoryID},
-		"tags":           []int{34, 35, 36},
+		"tags":           []int{42, 40}, // index, icpnl (coparmex/tillit/grupo-senda deprecated)
 		"featured_media": imageID,
 		"status":         "publish",
-	}
-
-	if categoryID == 30 || categoryID == 31 {
-		postData["tags"] = append(postData["tags"].([]int), 46)
-	}
-	if categoryID == 28 || categoryID == 31 || categoryID == 33 {
-		postData["tags"] = append(postData["tags"].([]int), 52)
 	}
 
 	jsonData, err := json.Marshal(postData)
